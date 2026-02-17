@@ -1,0 +1,2 @@
+appName: "Escanteios da Felicidade",
+
