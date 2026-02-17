@@ -1,2 +1,2 @@
-appName: "Escanteios da Felicidade",
+appName: "RedCorner IA",
 
