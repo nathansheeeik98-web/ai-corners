@@ -3,8 +3,8 @@
   "short_name": "IA Escanteios",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0B0B0D",
-  "theme_color": "#0B0B0D",
+  "background_color": "#0b0f17",
+  "theme_color": "#0b0f17",
   "description": "Assistente de decisão para escanteios ao vivo (ranking, favoritos, monitoramento).",
   "icons": [
     {
