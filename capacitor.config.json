@@ -1,9 +1,6 @@
 {
-  "appId": "com.aicorners.app",
-  "appName": "AICorners",
+  "appId": "com.redcorner.ia",
+  "appName": "RedCorner IA",
   "webDir": "public",
-  "bundledWebRuntime": false,
-  "server": {
-    "androidScheme": "https"
-  }
+  "bundledWebRuntime": false
 }
