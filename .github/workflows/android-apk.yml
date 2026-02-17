@@ -6,86 +6,69 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Setup Java
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm install
 
-      - name: Install asset tools (CI only)
-        run: npm i -D typescript @capacitor/assets sharp
+      - name: Install asset tools
+        run: npm install -D typescript @capacitor/assets sharp
 
       - name: Create RedCorner icon (SVG)
         run: |
           mkdir -p assets
-          cat > assets/icon.svg <<'SVG'
-          <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-            <defs>
-              <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#E10600"/>
-                <stop offset="1" stop-color="#8B0000"/>
-              </linearGradient>
-              <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-                <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000" flood-opacity="0.55"/>
-              </filter>
-            </defs>
-            <rect width="1024" height="1024" rx="220" fill="#0F0F0F"/>
-            <circle cx="512" cy="512" r="310" fill="url(#g)" filter="url(#shadow)"/>
-            <path d="M355 690 V390 C355 360 379 336 409 336 H680"
-                  fill="none" stroke="#FFF" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
-            <path d="M355 392 L520 330 L520 455 L355 515 Z" fill="#FFF" opacity="0.95"/>
-            <path d="M440 620 L520 545 L585 600 L705 480"
-                  fill="none" stroke="#FFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
-            <path d="M705 480 L705 560" fill="none" stroke="#FFF" stroke-width="38" stroke-linecap="round" opacity="0.95"/>
-            <path d="M705 480 L625 480" fill="none" stroke="#FFF" stroke-width="38" stroke-linecap="round" opacity="0.95"/>
+          cat > assets/icon.svg <<'EOF'
+          <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024">
+            <rect width="1024" height="1024" rx="200" fill="#0F0F0F"/>
+            <circle cx="512" cy="512" r="320" fill="#E10600"/>
+            <path d="M350 700 V350 H700" fill="none" stroke="#FFF" stroke-width="50" stroke-linecap="round"/>
           </svg>
-          SVG
+          EOF
 
-      - name: Generate icon.png + splash.png (sharp)
-        run: node - <<'NODE'
-          const fs = require("fs");
-          const sharp = require("sharp");
-
+      - name: Generate PNG icon + splash
+        run: |
+          node - <<'NODE'
+          const sharp = require('sharp');
+          const fs = require('fs');
+          const svg = fs.readFileSync('assets/icon.svg');
           (async () => {
-            const svg = fs.readFileSync("assets/icon.svg");
-            await sharp(svg).png().resize(1024,1024).toFile("assets/icon.png");
-
-            const bg = { r: 0x0F, g: 0x0F, b: 0x0F, alpha: 1 };
-            const icon = await sharp(svg).png().resize(720,720).toBuffer();
-
-            await sharp({ create: { width: 2732, height: 2732, channels: 4, background: bg } })
-              .composite([{ input: icon, gravity: "center" }])
-              .png()
-              .toFile("assets/splash.png");
-            console.log("OK assets generated");
+            await sharp(svg).resize(1024,1024).png().toFile('assets/icon.png');
+            const logo = await sharp(svg).resize(700,700).png().toBuffer();
+            await sharp({
+              create:{width:2732,height:2732,channels:4,background:'#0F0F0F'}
+            }).composite([{input: logo, gravity:'center'}])
+              .png().toFile('assets/splash.png');
           })().catch(e => { console.error(e); process.exit(1); });
           NODE
 
       - name: Generate Capacitor assets
         run: npx capacitor-assets generate
-      - name: Capacitor sync/copy
-        run: |
-          npx cap copy android
-          npx cap sync android
 
-      - name: Build APK (Debug)
-        working-directory: android
-        run: ./gradlew assembleDebug
+      - name: Build web
+        run: npm run build
 
-      - name: Upload APK artifact
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build Debug APK
+        run: cd android && ./gradlew assembleDebug
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
+          name: RedCornerIA-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
