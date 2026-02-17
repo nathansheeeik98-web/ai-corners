@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IA Escanteios — Live</title>
+  <style>
+    :root { --b:#ddd; --r:14px; --bg:#0f0f10; --fg:#f3f3f3; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:1100px}
+    h1{font-size:20px;margin:0 0 8px}
+    .hint{font-size:12px;opacity:.85;margin:6px 0 10px}
+    .card{border:1px solid var(--b);border-radius:var(--r);padding:12px;margin:10px 0}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row>*{flex:1;min-width:160px}
+    label{font-size:12px;opacity:.85}
+    input,button,select{width:100%;padding:10px;font-size:16px;border-radius:12px;border:1px solid var(--b)}
+    button{cursor:pointer;border:none}
+    .btn{background:#111;color:#fff}
+    .btn2{background:#f3f3f3}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);color:var(--fg);padding:12px;border-radius:12px;margin:0}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--b);margin-right:6px;font-size:13px}
+    .list{max-height:340px;overflow:auto;border:1px solid #eee;border-radius:12px}
+    .item{padding:10px;border-bottom:1px solid #eee}
+    .item:last-child{border-bottom:none}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    .badge{display:inline-block;padding:3px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px;margin-left:6px}
+  </style>
+</head>
+<body>
+  <h1>IA Escanteios — Live (econômico + ranking)</h1>
+  <div class="hint">
+    ✅ Carrega jogos ao vivo (barato) • ✅ “Avaliar” só no clique (puxa stats) • ✅ Ranking “Melhores jogos agora” • ⚠️ Sem garantia de ganho.
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div><button class="btn2" id="loadLive">Carregar jogos ao vivo</button></div>
+      <div>
+        <label>Filtro (time/liga/país)</label>
+        <input id="filter" placeholder="Ex: Brazil / Premier / Arsenal" />
+      </div>
+      <div>
+        <label>Alerta mínimo (confiança)</label>
+        <select id="alertMin">
+          <option value="70">70</option>
+          <option value="75" selected>75</option>
+          <option value="80">80</option>
+          <option value="85">85</option>
+        </select>
+      </div>
+      <div><button class="btn2" id="force">Forçar atualização agora</button></div>
+    </div>
+
+    <div class="hint">
+      No plano grátis: avalie alguns jogos e escolha 1 pra monitorar.  
+      “Avaliar” gasta requisição (stats). “Carregar” é barato (lista).
+    </div>
+  </div>
+
+  <div class="card">
+    <b>🔥 Melhores jogos agora (por avaliações)</b>
+    <div class="hint">Aparece depois que você clicar em “Avaliar” em alguns jogos.</div>
+    <div class="list" id="bestNow"></div>
+  </div>
+
+  <div class="card">
+    <b>Jogos ao vivo</b>
+    <div class="list" id="liveList"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Fixture #1</label>
+        <input id="fx1" placeholder="preenchido ao clicar em Monitorar" />
+      </div>
+      <div>
+        <label>Fixture #2</label>
+        <input id="fx2" placeholder="opcional" />
+      </div>
+      <div>
+        <label>Fixture #3</label>
+        <input id="fx3" placeholder="opcional" />
+      </div>
+      <div>
+        <label>Monitorar</label>
+        <button class="btn" id="setFx">Salvar & Monitorar</button>
+      </div>
+    </div>
+
+    <div id="meta" style="margin-top:10px"></div>
+    <pre id="snap">Sem dados ainda.</pre>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div><button class="btn" id="an1">Analisar Jogo 1</button></div>
+      <div><button class="btn" id="an2">Analisar Jogo 2</button></div>
+      <div><button class="btn" id="an3">Analisar Jogo 3</button></div>
+    </div>
+    <pre id="out">Clique em “Analisar”.</pre>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let latest = [];
+  let LIVE_MEM = [];
+  let EVAL_MEM = {}; // fixtureId -> { snapshot, heuristic, at }
+  let lastAlertAt = 0;
+  const ALERT_COOLDOWN_MS = 120000;
+
+  function pills(list) {
+    const meta = $("meta");
+    meta.innerHTML = "";
+    list.forEach(t => {
+      const s = document.createElement("span");
+      s.className = "pill";
+      s.textContent = t;
+      meta.appendChild(s);
+    });
+  }
+
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880;
+      g.gain.value = 0.05;
+      o.start();
+      setTimeout(() => { o.stop(); ctx.close(); }, 180);
+      if (navigator.vibrate) navigator.vibrate([120, 80, 120]);
+    } catch {}
+  }
+
+  function scoreEval(e) {
+    const h = e?.heuristic?.confianca ?? 0;
+    const m = e?.snapshot?.minute ?? 0;
+    let s = h;
+    if (m >= 15 && m <= 75) s += 5;
+    return s;
+  }
+
+  function renderBestNow() {
+    const box = $("bestNow");
+    const arr = Object.values(EVAL_MEM)
+      .sort((a,b) => scoreEval(b) - scoreEval(a))
+      .slice(0, 20);
+
+    box.innerHTML = "";
+    if (!arr.length) {
+      box.innerHTML = "<div class='item'>Ainda sem avaliações. Clique em “Avaliar” em alguns jogos.</div>";
+      return;
+    }
+
+    for (const e of arr) {
+      const s = e.snapshot;
+      const h = e.heuristic;
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div><b>${s.match}</b> <span class="mono">(${s.score})</span>
+          <span class="badge">Conf ${h.confianca}</span>
+          <span class="badge">${h.acao}</span>
+          <span class="badge">${h.linha_sugerida}</span>
+        </div>
+        <div class="hint">min ${s.minute} • esc ${s.corners_total} • chutes ${s.shots_total} • no alvo ${s.shots_on_target} • fixture ${s.fixture_id}</div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn2" data-mon="${s.fixture_id}">Monitorar (#1)</button>
+          <button class="btn2" data-an="${s.fixture_id}">Ver detalhes</button>
+        </div>
+      `;
+      div.querySelector("[data-mon]").onclick = () => { $("fx1").value = s.fixture_id; };
+      div.querySelector("[data-an]").onclick = () => { $("out").textContent = JSON.stringify(h, null, 2); };
+      box.appendChild(div);
+    }
+  }
+
+  async function loadLive() {
+    $("liveList").innerHTML = "Carregando...";
+    const r = await fetch("/api/live/list");
+    const j = await r.json();
+    if (!j.ok) {
+      $("liveList").innerHTML = "Erro: " + (j.error || "");
+      return;
+    }
+    LIVE_MEM = j.items || [];
+    renderLiveList();
+  }
+
+  function renderLiveList() {
+    const filter = ($("filter").value || "").toLowerCase().trim();
+    const items = LIVE_MEM.filter(x => {
+      if (!filter) return true;
+      const blob = `${x.country} ${x.league} ${x.home} ${x.away}`.toLowerCase();
+      return blob.includes(filter);
+    }).slice(0, 120);
+
+    const box = $("liveList");
+    box.innerHTML = "";
+
+    if (!items.length) {
+      box.innerHTML = "<div class='item'>Nada encontrado. Tente outro filtro.</div>";
+      return;
+    }
+
+    for (const it of items) {
+      const existing = EVAL_MEM[it.fixture_id];
+      const badge = existing ? ` <span class="badge">Conf ${existing.heuristic.confianca}</span><span class="badge">${existing.heuristic.acao}</span>` : "";
+
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div><b>${it.home}</b> vs <b>${it.away}</b> <span class="mono">(${it.score})</span>${badge}</div>
+        <div class="hint">${it.country} • ${it.league} • min ${it.minute} • fixture ${it.fixture_id}</div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn2" data-eval="${it.fixture_id}">Avaliar</button>
+          <button class="btn2" data-mon="${it.fixture_id}">Monitorar (#1)</button>
+        </div>
+      `;
+      div.querySelector("[data-mon]").onclick = () => { $("fx1").value = it.fixture_id; };
+      div.querySelector("[data-eval]").onclick = () => evaluateFixture(it.fixture_id);
+
+      box.appendChild(div);
+    }
+  }
+
+  async function evaluateFixture(fixtureId) {
+    // Se já avaliou há pouco, só re-render
+    const r = await fetch(`/api/live/eval/${encodeURIComponent(fixtureId)}`);
+    const j = await r.json();
+    if (!j.ok) {
+      alert("Erro ao avaliar: " + (j.error || ""));
+      return;
+    }
+    EVAL_MEM[fixtureId] = { snapshot: j.snapshot, heuristic: j.heuristic, at: Date.now() };
+    renderBestNow();
+    renderLiveList();
+
+    // alerta automático se ENTRAR + confiança >= X
+    const min = Number($("alertMin").value || 75);
+    const conf = Number(j.heuristic?.confianca || 0);
+    const should = (j.heuristic?.acao === "ENTRAR" && conf >= min);
+
+    const now = Date.now();
+    if (should && (now - lastAlertAt) > ALERT_COOLDOWN_MS) {
+      lastAlertAt = now;
+      beep();
+      alert(`ALERTA: ENTRAR (conf ${conf}) • Linha: ${j.heuristic.linha_sugerida}\n${j.snapshot.match} (${j.snapshot.score})`);
+    }
+  }
+
+  async function setFixtures() {
+    const ids = [$("fx1").value, $("fx2").value, $("fx3").value].map(x => (x||"").trim()).filter(Boolean).slice(0,3);
+    const r = await fetch("/api/live/set-fixtures", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ fixture_ids: ids })
+    });
+    const j = await r.json();
+    pills([`Fixtures: ${(j.fixture_ids||[]).join(", ") || "—"}`, `Auto: ${j.refresh_seconds}s`, `UI: 15s`]);
+    await refreshSnapshots();
+  }
+
+  async function refreshSnapshots() {
+    const r = await fetch("/api/live/snapshots");
+    const j = await r.json();
+    latest = (j.items || []).map(x => x?.data).filter(Boolean);
+    $("snap").textContent = JSON.stringify(j, null, 2);
+    pills([`Fixtures: ${(j.fixture_ids||[]).join(", ") || "—"}`, `Auto: ${j.refresh_seconds}s`, `UI: 15s`, `Atualizado: ${new Date().toLocaleTimeString()}`]);
+  }
+
+  async function forceRefresh() {
+    await fetch("/api/live/force-refresh", { method: "POST" });
+    await refreshSnapshots();
+  }
+
+  async function analyzeIndex(i) {
+    const data = latest[i];
+    if (!data) { $("out").textContent = "Sem snapshot. Clique em atualizar."; return; }
+
+    $("out").textContent = "Analisando...";
+    const r = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({
+        minute: data.minute,
+        score: data.score,
+        corners_home: data.corners_home,
+        corners_away: data.corners_away,
+        corners_total: data.corners_total,
+        shots_total: data.shots_total,
+        shots_on_target: data.shots_on_target,
+        pressure_side: data.pressure_side,
+        red_cards: data.red_cards,
+        notes: `Fonte: API-Football | ${data.match} | fixture ${data.fixture_id}`
+      })
+    });
+    const j = await r.json();
+    const result = j.result || j.heuristic || j;
+    $("out").textContent = JSON.stringify(result, null, 2);
+
+    const min = Number($("alertMin").value || 75);
+    const conf = Number(result.confianca || 0);
+    const should = (result.acao === "ENTRAR" && conf >= min);
+    const now = Date.now();
+    if (should && (now - lastAlertAt) > ALERT_COOLDOWN_MS) {
+      lastAlertAt = now;
+      beep();
+      alert(`ALERTA: ENTRAR (conf ${conf}) • Linha: ${result.linha_sugerida}`);
+    }
+  }
+
+  $("loadLive").onclick = loadLive;
+  $("force").onclick = forceRefresh;
+  $("setFx").onclick = setFixtures;
+
+  $("filter").addEventListener("input", renderLiveList);
+
+  $("an1").onclick = () => analyzeIndex(0);
+  $("an2").onclick = () => analyzeIndex(1);
+  $("an3").onclick = () => analyzeIndex(2);
+
+  // UI puxa só cache do seu servidor (não consome API-Football)
+  setInterval(refreshSnapshots, 15000);
+
+  // inicial
+  renderBestNow();
+</script>
+</body>
+</html>

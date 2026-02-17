@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IA Escanteios Ao Vivo</title>
+  <style>
+    :root { --b:#ddd; --r:14px; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:980px}
+    h1{font-size:20px;margin:0 0 8px}
+    p{margin:6px 0 12px;line-height:1.35}
+    .card{border:1px solid var(--b);border-radius:var(--r);padding:12px;margin:10px 0}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .row{display:flex;gap:10px}
+    .row>*{flex:1}
+    label{font-size:12px;opacity:.85}
+    input,select,textarea,button{width:100%;padding:10px;font-size:16px;border-radius:12px;border:1px solid var(--b)}
+    textarea{min-height:86px}
+    button{cursor:pointer;border:none}
+    .btn{background:#111;color:#fff}
+    .btn2{background:#f3f3f3}
+    pre{white-space:pre-wrap;word-break:break-word;background:#111;color:#eee;padding:12px;border-radius:12px;margin:0}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--b);margin-right:6px;font-size:13px}
+    .hint{font-size:12px;opacity:.85}
+  </style>
+</head>
+<body>
+  <h1>IA de Escanteios (Ao Vivo)</h1>
+  <p class="hint">
+    Preencha stats do live-score (Sofascore/365Scores/Flashscore) e receba: <b>ENTRAR / ESPERAR / PULAR</b>, linha sugerida e plano de cashout.
+    <br>⚠️ Sem garantias. É um assistente de decisão.
+  </p>
+
+  <div class="card grid">
+    <div>
+      <label>Minuto</label>
+      <input id="minute" type="number" placeholder="Ex: 23" />
+    </div>
+    <div>
+      <label>Placar</label>
+      <input id="score" placeholder="Ex: 0-0" value="0-0"/>
+    </div>
+
+    <div class="row" style="grid-column:1/-1">
+      <div>
+        <label>Escanteios (mandante)</label>
+        <input id="corners_home" type="number" placeholder="Ex: 3" />
+      </div>
+      <div>
+        <label>Escanteios (visitante)</label>
+        <input id="corners_away" type="number" placeholder="Ex: 1" />
+      </div>
+    </div>
+
+    <div style="grid-column:1/-1">
+      <label>Escanteios (total)</label>
+      <input id="corners_total" type="number" placeholder="Ex: 4" />
+    </div>
+
+    <div class="row" style="grid-column:1/-1">
+      <div>
+        <label>Finalizações (total)</label>
+        <input id="shots_total" type="number" placeholder="Ex: 7" />
+      </div>
+      <div>
+        <label>No alvo</label>
+        <input id="shots_on_target" type="number" placeholder="Ex: 2" />
+      </div>
+    </div>
+
+    <div>
+      <label>Ataques perigosos (opcional)</label>
+      <input id="dangerous_attacks" type="number" placeholder="Ex: 18" />
+    </div>
+
+    <div>
+      <label>Quem está pressionando?</label>
+      <select id="pressure_side">
+        <option value="Equilibrado">Equilibrado</option>
+        <option value="Mandante">Mandante</option>
+        <option value="Visitante">Visitante</option>
+      </select>
+    </div>
+
+    <div>
+      <label>Cartões vermelhos (0/1/2)</label>
+      <input id="red_cards" type="number" value="0" />
+    </div>
+
+    <div style="grid-column:1/-1">
+      <label>Observações (ex: “muitos cruzamentos”, “jogo truncado”)</label>
+      <textarea id="notes"></textarea>
+    </div>
+
+    <div class="row" style="grid-column:1/-1">
+      <button class="btn" id="go">Analisar</button>
+      <button class="btn2" id="fill">Exemplo</button>
+      <button class="btn2" id="clear">Limpar</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="meta" style="margin-bottom:10px"></div>
+    <pre id="out">Preencha e clique em “Analisar”.</pre>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function payload() {
+    return {
+      minute: Number($("minute").value || 0),
+      score: $("score").value || "0-0",
+      corners_home: Number($("corners_home").value || 0),
+      corners_away: Number($("corners_away").value || 0),
+      corners_total: Number($("corners_total").value || 0),
+      shots_total: Number($("shots_total").value || 0),
+      shots_on_target: Number($("shots_on_target").value || 0),
+      dangerous_attacks: $("dangerous_attacks").value ? Number($("dangerous_attacks").value) : null,
+      pressure_side: $("pressure_side").value,
+      red_cards: Number($("red_cards").value || 0),
+      notes: $("notes").value || ""
+    };
+  }
+
+  function render(j) {
+    const meta = $("meta");
+    meta.innerHTML = "";
+    if (j.mode) {
+      const pill = document.createElement("span");
+      pill.className = "pill";
+      pill.textContent = "Modo: " + j.mode;
+      meta.appendChild(pill);
+    }
+    if (j.note) {
+      const pill2 = document.createElement("span");
+      pill2.className = "pill";
+      pill2.textContent = j.note;
+      meta.appendChild(pill2);
+    }
+
+    const out = $("out");
+    if (j.result) {
+      out.textContent = JSON.stringify(j.result, null, 2);
+    } else if (j.raw) {
+      out.textContent = j.raw;
+    } else {
+      out.textContent = JSON.stringify(j, null, 2);
+    }
+  }
+
+  $("go").onclick = async () => {
+    $("out").textContent = "Analisando...";
+    $("meta").innerHTML = "";
+    const r = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify(payload())
+    });
+    const j = await r.json();
+    render(j);
+  };
+
+  $("fill").onclick = () => {
+    $("minute").value = 23;
+    $("score").value = "0-0";
+    $("corners_home").value = 3;
+    $("corners_away").value = 1;
+    $("corners_total").value = 4;
+    $("shots_total").value = 8;
+    $("shots_on_target").value = 2;
+    $("dangerous_attacks").value = 18;
+    $("pressure_side").value = "Mandante";
+    $("red_cards").value = 0;
+    $("notes").value = "Muitos cruzamentos e pressão do mandante.";
+  };
+
+  $("clear").onclick = () => {
+    ["minute","score","corners_home","corners_away","corners_total","shots_total","shots_on_target","dangerous_attacks","notes"]
+      .forEach(id => $(id).value = "");
+    $("score").value = "0-0";
+    $("pressure_side").value = "Equilibrado";
+    $("red_cards").value = 0;
+    $("out").textContent = "Preencha e clique em “Analisar”.";
+    $("meta").innerHTML = "";
+  };
+</script>
+</body>
+</html>

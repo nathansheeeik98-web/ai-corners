@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IA Escanteios Ao Vivo — Live (3 jogos)</title>
+  <style>
+    :root { --b:#ddd; --r:14px; --bg:#0f0f10; --fg:#f3f3f3; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:1100px}
+    h1{font-size:20px;margin:0 0 8px}
+    .hint{font-size:12px;opacity:.85;margin:6px 0 10px}
+    .card{border:1px solid var(--b);border-radius:var(--r);padding:12px;margin:10px 0}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row>*{flex:1;min-width:200px}
+    label{font-size:12px;opacity:.85}
+    input,textarea,button,select{width:100%;padding:10px;font-size:16px;border-radius:12px;border:1px solid var(--b)}
+    button{cursor:pointer;border:none}
+    .btn{background:#111;color:#fff}
+    .btn2{background:#f3f3f3}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);color:var(--fg);padding:12px;border-radius:12px;margin:0}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{border-bottom:1px solid #eee;padding:8px;vertical-align:top}
+    th{text-align:left;white-space:nowrap}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--b);margin-right:6px;font-size:13px}
+  </style>
+</head>
+<body>
+  <h1>IA Escanteios Ao Vivo — 3 jogos (auto 60s)</h1>
+  <div class="hint">
+    Você coloca até 3 <b>Fixture IDs</b> da API-Football. O sistema busca stats automaticamente a cada 60s e você analisa/ salva.
+    ⚠️ Sem garantias de ganho — isso é só assistente de decisão.
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Fixture ID #1</label>
+        <input id="fx1" placeholder="Ex: 123456" />
+      </div>
+      <div>
+        <label>Fixture ID #2</label>
+        <input id="fx2" placeholder="Ex: 234567" />
+      </div>
+      <div>
+        <label>Fixture ID #3</label>
+        <input id="fx3" placeholder="Ex: 345678" />
+      </div>
+      <div>
+        <label>Atualização</label>
+        <button class="btn2" id="setFx">Salvar & Começar</button>
+      </div>
+    </div>
+
+    <div class="hint">
+      Como achar Fixture IDs (no Termux):<br>
+      <code>curl -s -H "x-apisports-key: SUA_CHAVE" "https://v3.football.api-sports.io/fixtures?live=all" | head -c 1200</code><br>
+      (procure por <code>"id":</code> dentro de <code>fixture</code>)
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div><button class="btn2" id="refresh">Atualizar agora</button></div>
+      <div><button class="btn" id="analyze1">Analisar Jogo 1</button></div>
+      <div><button class="btn" id="analyze2">Analisar Jogo 2</button></div>
+      <div><button class="btn" id="analyze3">Analisar Jogo 3</button></div>
+    </div>
+    <div id="meta" style="margin-top:10px"></div>
+    <pre id="snap">Sem dados ainda.</pre>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px">Resposta da IA</h3>
+    <pre id="out">Clique em “Analisar Jogo X”.</pre>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let latest = []; // snapshots array
+
+  function pills(list) {
+    const meta = $("meta");
+    meta.innerHTML = "";
+    list.forEach(t => {
+      const s = document.createElement("span");
+      s.className = "pill";
+      s.textContent = t;
+      meta.appendChild(s);
+    });
+  }
+
+  async function setFixtures() {
+    const ids = [$("fx1").value, $("fx2").value, $("fx3").value].map(x => (x||"").trim()).filter(Boolean).slice(0,3);
+    const r = await fetch("/api/live/set-fixtures", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ fixture_ids: ids })
+    });
+    const j = await r.json();
+    pills([`Fixtures: ${j.fixture_ids.join(", ") || "—"}`, `Refresh: ${j.refresh_seconds}s`]);
+    await refreshSnapshots();
+  }
+
+  async function refreshSnapshots() {
+    const r = await fetch("/api/live/snapshots");
+    const j = await r.json();
+    const items = j.items || [];
+    latest = items.map(x => x?.data).filter(Boolean);
+
+    const pretty = JSON.stringify(j, null, 2);
+    $("snap").textContent = pretty;
+
+    pills([`Monitorando: ${(j.fixture_ids||[]).join(", ") || "—"}`, `Refresh: ${j.refresh_seconds}s`, `Atualizado: ${new Date().toLocaleTimeString()}`]);
+  }
+
+  async function analyzeIndex(i) {
+    // i: 0..2
+    const data = latest[i];
+    if (!data) {
+      $("out").textContent = "Sem snapshot desse jogo ainda. Clique em “Atualizar agora” ou espere o refresh.";
+      return;
+    }
+    $("out").textContent = "Analisando...";
+    const r = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({
+        minute: data.minute,
+        score: data.score,
+        corners_home: data.corners_home,
+        corners_away: data.corners_away,
+        corners_total: data.corners_total,
+        shots_total: data.shots_total,
+        shots_on_target: data.shots_on_target,
+        pressure_side: data.pressure_side,
+        red_cards: data.red_cards,
+        notes: `Fonte: API-Football | ${data.match} | fixture ${data.fixture_id}`
+      })
+    });
+    const j = await r.json();
+    const result = j.result || j.heuristic || j;
+    $("out").textContent = JSON.stringify(result, null, 2);
+  }
+
+  $("setFx").onclick = setFixtures;
+  $("refresh").onclick = refreshSnapshots;
+
+  $("analyze1").onclick = () => analyzeIndex(0);
+  $("analyze2").onclick = () => analyzeIndex(1);
+  $("analyze3").onclick = () => analyzeIndex(2);
+
+  // auto refresh UI a cada 15s (só pega o cache do seu servidor; não consome API-Football diretamente)
+  setInterval(refreshSnapshots, 15000);
+</script>
+</body>
+</html>

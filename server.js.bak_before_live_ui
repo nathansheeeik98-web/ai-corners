@@ -1,0 +1,353 @@
+import express from "express";
+import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
+
+dotenv.config();
+
+const app = express();
+app.use(express.json({ limit: "512kb" }));
+app.use(express.static("public"));
+
+const PORT = process.env.PORT || 3000;
+const HISTORY_FILE = path.resolve("./history.json");
+
+// ===== Helpers =====
+function safeNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+function nowISO() {
+  return new Date().toISOString();
+}
+
+function readHistory() {
+  try {
+    if (!fs.existsSync(HISTORY_FILE)) return [];
+    const raw = fs.readFileSync(HISTORY_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function writeHistory(items) {
+  fs.writeFileSync(HISTORY_FILE, JSON.stringify(items, null, 2));
+}
+
+// ===== Heurística local (fallback) =====
+function computeHeuristic(data) {
+  const minute = clamp(safeNum(data.minute, 0), 0, 120);
+  const corners = clamp(safeNum(data.corners_total, 0), 0, 50);
+  const shots = clamp(safeNum(data.shots_total, 0), 0, 80);
+  const sot = clamp(safeNum(data.shots_on_target, 0), 0, 30);
+  const reds = clamp(safeNum(data.red_cards, 0), 0, 4);
+
+  const paceCorners = minute > 0 ? corners / minute : 0;
+  const paceShots = minute > 0 ? shots / minute : 0;
+
+  let score = 0;
+  score += clamp(paceCorners * 160, 0, 55);
+  score += clamp(paceShots * 80, 0, 25);
+  score += clamp(sot * 3, 0, 15);
+
+  if (data.pressure_side === "Mandante" || data.pressure_side === "Visitante") score += 5;
+  if (reds > 0) score -= 18;
+
+  score = clamp(Math.round(score), 0, 100);
+
+  const proj = paceCorners * 95;
+  let linha = "Over 6.5";
+  if (proj >= 10.5) linha = "Over 9.5";
+  else if (proj >= 9.5) linha = "Over 8.5";
+  else if (proj >= 8.5) linha = "Over 7.5";
+
+  let acao = "ESPERAR";
+  if (score >= 70) acao = "ENTRAR";
+  else if (score < 45) acao = "PULAR";
+
+  return {
+    acao,
+    confianca: score,
+    linha_sugerida: linha,
+    justificativa_curta:
+      reds > 0
+        ? "Cartão vermelho aumenta imprevisibilidade. Só entrar se o ritmo estiver MUITO acima da média."
+        : "Decisão baseada no ritmo (escanteios/min), pressão e volume de finalizações.",
+    checklist: [
+      "3+ escanteios até 25’ (bom sinal)",
+      "Cruzamentos/chutes bloqueados",
+      "Time perdendo tende a forçar escanteios",
+      "Evitar jogo truncado/sem ataques",
+      "Cuidado com cartão vermelho"
+    ],
+    cashout_plano:
+      "Se atingir ~70% da linha até 60–65’ e o ritmo cair, considerar cashout parcial/total para proteger lucro.",
+    gestao_banca:
+      "Use entrada fracionada. Preserve parte do lucro fora da próxima aposta (ex: 30–50%)."
+  };
+}
+
+// ===== API-Football (API-SPORTS) =====
+const AF_KEY = process.env.API_FOOTBALL_KEY || "";
+const AF_HOST = "v3.football.api-sports.io";
+const REFRESH_SECONDS = clamp(safeNum(process.env.LIVE_REFRESH_SECONDS, 60), 10, 600);
+
+// Cache live: até 3 fixtures
+let liveFixtureIds = []; // strings/nums
+let liveCache = {};      // { [fixtureId]: { updated_at, ok, data, error } }
+
+async function afFetchJson(pathname) {
+  if (!AF_KEY || AF_KEY.includes("COLE_SUA_CHAVE")) throw new Error("API_FOOTBALL_KEY não configurada");
+  const url = `https://${AF_HOST}${pathname}`;
+  const r = await fetch(url, {
+    headers: {
+      "x-apisports-key": AF_KEY
+    }
+  });
+  const txt = await r.text();
+  if (!r.ok) throw new Error(`API-Football HTTP ${r.status}: ${txt.slice(0, 300)}`);
+  return JSON.parse(txt);
+}
+
+function statValue(statsArr, typeName) {
+  // statsArr: [{type, value}, ...]
+  const found = (statsArr || []).find(x => (x?.type || "").toLowerCase() === typeName.toLowerCase());
+  const v = found?.value;
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  // às vezes vem string "12"
+  const n = Number(String(v).replace(/[^\d\-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+async function getLiveSnapshot(fixtureId) {
+  // 1) dados do jogo (tempo/placar/cartões) via /fixtures?id=
+  const fx = await afFetchJson(`/fixtures?id=${encodeURIComponent(fixtureId)}`);
+  const item = fx?.response?.[0];
+  if (!item) throw new Error("Fixture não encontrado");
+
+  const minute = item?.fixture?.status?.elapsed ?? null;
+  const scoreHome = item?.goals?.home ?? 0;
+  const scoreAway = item?.goals?.away ?? 0;
+
+  // vermelho: contando cartões vermelhos do fixture (nem sempre vem direto)
+  // Aqui usamos eventos para detectar red cards (custa +1 req). Para economizar,
+  // vamos tentar inferir por events SOMENTE se você quiser mais precisão.
+  // Por enquanto: mantém 0 e deixa você usar observação manual se necessário.
+  const red_cards = 0;
+
+  // 2) stats (corners/shots) via /fixtures/statistics?fixture=
+  const st = await afFetchJson(`/fixtures/statistics?fixture=${encodeURIComponent(fixtureId)}`);
+  const teams = st?.response || [];
+
+  // Cada item: {team, statistics:[{type,value}]}
+  const homeStats = teams?.[0]?.statistics || [];
+  const awayStats = teams?.[1]?.statistics || [];
+
+  const cornersHome = statValue(homeStats, "Corner Kicks");
+  const cornersAway = statValue(awayStats, "Corner Kicks");
+
+  const shotsHome = statValue(homeStats, "Total Shots");
+  const shotsAway = statValue(awayStats, "Total Shots");
+
+  const sotHome = statValue(homeStats, "Shots on Goal");
+  const sotAway = statValue(awayStats, "Shots on Goal");
+
+  const corners_total = (cornersHome ?? 0) + (cornersAway ?? 0);
+  const shots_total = (shotsHome ?? 0) + (shotsAway ?? 0);
+  const shots_on_target = (sotHome ?? 0) + (sotAway ?? 0);
+
+  const homeName = item?.teams?.home?.name || "Home";
+  const awayName = item?.teams?.away?.name || "Away";
+
+  // pressão (bem simples): quem tem mais chutes totais
+  let pressure_side = "Equilibrado";
+  if ((shotsHome ?? 0) > (shotsAway ?? 0) + 2) pressure_side = "Mandante";
+  else if ((shotsAway ?? 0) > (shotsHome ?? 0) + 2) pressure_side = "Visitante";
+
+  return {
+    fixture_id: String(fixtureId),
+    match: `${homeName} vs ${awayName}`,
+    minute: minute ?? 0,
+    score: `${scoreHome}-${scoreAway}`,
+    corners_home: cornersHome ?? 0,
+    corners_away: cornersAway ?? 0,
+    corners_total,
+    shots_total,
+    shots_on_target,
+    pressure_side,
+    red_cards,
+    updated_at: nowISO()
+  };
+}
+
+async function refreshLiveCacheOnce() {
+  const ids = liveFixtureIds.slice(0, 3);
+  if (!ids.length) return;
+
+  for (const id of ids) {
+    try {
+      const snap = await getLiveSnapshot(id);
+      liveCache[String(id)] = { ok: true, updated_at: nowISO(), data: snap };
+    } catch (e) {
+      liveCache[String(id)] = { ok: false, updated_at: nowISO(), error: String(e) };
+    }
+  }
+}
+
+setInterval(() => {
+  refreshLiveCacheOnce().catch(() => {});
+}, REFRESH_SECONDS * 1000);
+
+// ===== APIs =====
+
+// histórico
+app.get("/api/history", (_req, res) => res.json({ items: readHistory() }));
+
+app.post("/api/history", (req, res) => {
+  const entry = req.body;
+  if (!entry || typeof entry !== "object") return res.status(400).json({ error: "invalid body" });
+
+  const items = readHistory();
+  items.unshift(entry);
+  writeHistory(items.slice(0, 500));
+
+  res.json({ ok: true });
+});
+
+app.patch("/api/history/:id", (req, res) => {
+  const { id } = req.params;
+  const patch = req.body || {};
+  const items = readHistory();
+  const idx = items.findIndex(x => x && x.id === id);
+  if (idx === -1) return res.status(404).json({ error: "not found" });
+
+  items[idx] = { ...items[idx], ...patch, updated_at: nowISO() };
+  writeHistory(items);
+  res.json({ ok: true });
+});
+
+// configurar quais 3 fixtures monitorar
+app.post("/api/live/set-fixtures", async (req, res) => {
+  const ids = Array.isArray(req.body?.fixture_ids) ? req.body.fixture_ids : [];
+  liveFixtureIds = ids.map(String).slice(0, 3);
+  await refreshLiveCacheOnce().catch(() => {});
+  res.json({ ok: true, fixture_ids: liveFixtureIds, refresh_seconds: REFRESH_SECONDS });
+});
+
+// obter snapshot atual do cache
+app.get("/api/live/snapshots", (_req, res) => {
+  const ids = liveFixtureIds.slice(0, 3);
+  const items = ids.map(id => liveCache[String(id)] || { ok: false, error: "Sem dados ainda" });
+  res.json({
+    fixture_ids: ids,
+    refresh_seconds: REFRESH_SECONDS,
+    items
+  });
+});
+
+// Análise (IA OpenAI se configurada; fallback heurístico)
+app.post("/api/analyze", async (req, res) => {
+  try {
+    const data = req.body || {};
+    const apiKey = process.env.OPENAI_API_KEY || "";
+
+    const local = computeHeuristic(data);
+
+    if (!apiKey || apiKey.includes("COLE_SUA_CHAVE")) {
+      return res.json({
+        mode: "heuristic_only",
+        result: local,
+        note: "Configure OPENAI_API_KEY no .env para ativar IA."
+      });
+    }
+
+    const system = `
+Você é um analista focado em ESCANTEIOS ao vivo.
+Objetivo: reduzir decisões emocionais e sugerir entradas com base em sinais estatísticos.
+NÃO prometa lucro, NÃO garanta ganhos. Seja direto.
+Responda em PT-BR e retorne APENAS JSON estrito com:
+{
+  "acao": "ENTRAR" | "ESPERAR" | "PULAR",
+  "confianca": number (0-100),
+  "linha_sugerida": string,
+  "justificativa_curta": string,
+  "checklist": string[],
+  "cashout_plano": string,
+  "gestao_banca": string
+}
+Regras:
+- Se houver cartão vermelho, prefira "PULAR" ou "ESPERAR", salvo ritmo MUITO forte.
+- Sugira linhas conservadoras (Over 6.5/7.5/8.5) quando a confiança não for alta.
+`.trim();
+
+    const user = `
+Dados do jogo (ao vivo):
+- Minuto: ${data.minute}
+- Placar: ${data.score}
+- Escanteios total: ${data.corners_total}
+- Escanteios mandante/visitante: ${data.corners_home}/${data.corners_away}
+- Finalizações totais: ${data.shots_total}
+- Finalizações no alvo: ${data.shots_on_target}
+- Quem pressiona: ${data.pressure_side}
+- Cartões vermelhos: ${data.red_cards}
+Observações: ${data.notes ?? ""}
+Contexto: usuário quer consistência em escanteios ao vivo.
+`.trim();
+
+    const r = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "gpt-5.2",
+        input: [
+          { role: "system", content: system },
+          { role: "user", content: user }
+        ],
+        text: { format: { type: "text" } }
+      })
+    });
+
+    const outTxt = await r.text();
+    if (!r.ok) {
+      return res.json({ mode: "heuristic_fallback", result: local, note: "Falha na IA.", api_error: outTxt.slice(0, 800) });
+    }
+
+    const out = JSON.parse(outTxt);
+    let outputText = "";
+    if (out.output && Array.isArray(out.output)) {
+      for (const o of out.output) {
+        if (o.content && Array.isArray(o.content)) {
+          for (const c of o.content) {
+            if (typeof c.text === "string") outputText += c.text;
+            if (c.text && typeof c.text.value === "string") outputText += c.text.value;
+          }
+        }
+      }
+    }
+    if (!outputText && typeof out.output_text === "string") outputText = out.output_text;
+
+    try {
+      const parsed = JSON.parse(outputText);
+      return res.json({ mode: "ai", result: parsed });
+    } catch {
+      return res.json({ mode: "ai_unparsed", raw: outputText || "(sem texto)", heuristic: local });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e) });
+  }
+});
+
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+app.listen(PORT, () => {
+  console.log(`✅ Rodando em http://127.0.0.1:${PORT}`);
+  console.log(`✅ Live refresh: a cada ${REFRESH_SECONDS}s | até 3 jogos`);
+});

@@ -1,0 +1,188 @@
+import express from "express";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const app = express();
+app.use(express.json({ limit: "256kb" }));
+app.use(express.static("public"));
+
+function safeNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function computeHeuristic(data) {
+  // Heurística local (fallback) caso a API falhe
+  const minute = clamp(safeNum(data.minute, 0), 0, 120);
+  const corners = clamp(safeNum(data.corners_total, 0), 0, 50);
+  const shots = clamp(safeNum(data.shots_total, 0), 0, 80);
+  const sot = clamp(safeNum(data.shots_on_target, 0), 0, 30);
+  const reds = clamp(safeNum(data.red_cards, 0), 0, 4);
+
+  const paceCorners = minute > 0 ? (corners / minute) : 0; // escanteios por minuto
+  const paceShots = minute > 0 ? (shots / minute) : 0;
+
+  let score = 0;
+  // escanteios cedo pesam muito
+  score += clamp(paceCorners * 160, 0, 55);
+  // finalizações indicam pressão
+  score += clamp(paceShots * 80, 0, 25);
+  score += clamp(sot * 3, 0, 15);
+
+  if (data.pressure_side === "Mandante" || data.pressure_side === "Visitante") score += 5;
+  if (reds > 0) score -= 18; // cartão vermelho bagunça dinâmica
+
+  score = clamp(Math.round(score), 0, 100);
+
+  // Sugestão conservadora de linha baseada na projeção simples
+  // Projeção: corners_final ≈ paceCorners * 95 (média de tempo efetivo) (bem grosseiro)
+  const proj = paceCorners * 95;
+  let linha = "Over 6.5";
+  if (proj >= 10.5) linha = "Over 9.5";
+  else if (proj >= 9.5) linha = "Over 8.5";
+  else if (proj >= 8.5) linha = "Over 7.5";
+
+  let acao = "ESPERAR";
+  if (score >= 70) acao = "ENTRAR";
+  else if (score < 45) acao = "PULAR";
+
+  return {
+    acao,
+    confianca: score,
+    linha_sugerida: linha,
+    justificativa_curta:
+      reds > 0
+        ? "Cartão vermelho aumenta imprevisibilidade. Só entrar se o ritmo estiver MUITO acima da média."
+        : "Decisão baseada no ritmo (escanteios por minuto), pressão e volume de finalizações.",
+    checklist: [
+      "3+ escanteios até 25’ (bom sinal)",
+      "Finalizações e cruzamentos constantes",
+      "Time perdendo costuma forçar escanteios",
+      "Evitar jogo truncado/sem ataques",
+      "Cuidado com cartão vermelho"
+    ],
+    cashout_plano:
+      "Se atingir ~70% da linha até 60–65’ e o ritmo cair, considerar cashout parcial/total para proteger lucro.",
+    gestao_banca:
+      "Se banca subiu (ex: R$40), use no máximo 50–70% por entrada e preserve uma parte como lucro."
+  };
+}
+
+app.post("/api/analyze", async (req, res) => {
+  try {
+    const data = req.body || {};
+    const apiKey = process.env.OPENAI_API_KEY;
+
+    // Se não tiver chave, devolve só heurística
+    if (!apiKey || apiKey.includes("COLE_SUA_CHAVE_AQUI")) {
+      return res.json({
+        mode: "heuristic_only",
+        result: computeHeuristic(data),
+        note: "Configure OPENAI_API_KEY no .env para ativar a análise com IA."
+      });
+    }
+
+    const system = `
+Você é um analista focado em ESCANTEIOS ao vivo.
+Objetivo: reduzir decisões emocionais e sugerir entradas conservadoras quando houver sinais estatísticos.
+NÃO prometa lucro, NÃO garanta ganhos, NÃO use linguagem de certeza.
+Responda em PT-BR e retorne APENAS JSON estrito com:
+{
+  "acao": "ENTRAR" | "ESPERAR" | "PULAR",
+  "confianca": number (0-100),
+  "linha_sugerida": string,
+  "justificativa_curta": string,
+  "checklist": string[],
+  "cashout_plano": string,
+  "gestao_banca": string
+}
+Regras:
+- Se houver cartão vermelho, prefira "PULAR" ou "ESPERAR", salvo ritmo MUITO forte.
+- Foque em linhas conservadoras (Over 6.5/7.5/8.5) quando o usuário quer consistência.
+- Baseie a confiança principalmente em: escanteios até o minuto atual, ritmo, volume de finalizações e pressão.
+`.trim();
+
+    const user = `
+Dados do jogo (ao vivo):
+- Minuto: ${data.minute}
+- Placar: ${data.score}
+- Escanteios total: ${data.corners_total}
+- Escanteios mandante/visitante: ${data.corners_home}/${data.corners_away}
+- Finalizações totais: ${data.shots_total}
+- Finalizações no alvo: ${data.shots_on_target}
+- Ataques perigosos: ${data.dangerous_attacks ?? "N/A"}
+- Quem pressiona: ${data.pressure_side}
+- Cartões vermelhos: ${data.red_cards}
+- Observações: ${data.notes ?? ""}
+Contexto: usuário já aumentou banca e quer decisão CONSERVADORA focada em escanteios ao vivo.
+`.trim();
+
+    const r = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "gpt-5.2",
+        input: [
+          { role: "system", content: system },
+          { role: "user", content: user }
+        ],
+        text: { format: { type: "text" } }
+      })
+    });
+
+    if (!r.ok) {
+      const details = await r.text();
+      // fallback heurístico se a API falhar
+      return res.status(200).json({
+        mode: "heuristic_fallback",
+        result: computeHeuristic(data),
+        note: "Falha ao chamar API. Usando heurística local.",
+        api_error: details.slice(0, 1200)
+      });
+    }
+
+    const out = await r.json();
+
+    // Extrair texto do response (varia conforme payload)
+    let outputText = "";
+    if (out.output && Array.isArray(out.output)) {
+      for (const o of out.output) {
+        if (o.content && Array.isArray(o.content)) {
+          for (const c of o.content) {
+            if (typeof c.text === "string") outputText += c.text;
+            if (c.text && typeof c.text.value === "string") outputText += c.text.value;
+          }
+        }
+      }
+    }
+    if (!outputText && typeof out.output_text === "string") outputText = out.output_text;
+
+    // tenta parsear JSON (se vier com lixo, fallback)
+    try {
+      const parsed = JSON.parse(outputText);
+      return res.json({ mode: "ai", result: parsed });
+    } catch {
+      return res.json({
+        mode: "ai_unparsed",
+        raw: outputText || "(sem texto)",
+        heuristic: computeHeuristic(data)
+      });
+    }
+  } catch (e) {
+    return res.status(500).json({ error: "Server error", details: String(e) });
+  }
+});
+
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("✅ Rodando em http://127.0.0.1:" + (process.env.PORT || 3000));
+});

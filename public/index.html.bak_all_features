@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>IA Escanteios — SUPER ECONÔMICO</title>
+<style>
+body{font-family:system-ui;margin:16px;max-width:1000px}
+.card{border:1px solid #ddd;border-radius:12px;padding:12px;margin:10px 0}
+button{padding:8px 12px;border-radius:10px;border:none;cursor:pointer}
+.btn{background:#111;color:#fff}
+.btn2{background:#eee}
+.list{max-height:320px;overflow:auto;border:1px solid #eee;border-radius:10px}
+.item{padding:8px;border-bottom:1px solid #eee}
+.item:last-child{border-bottom:none}
+.badge{display:inline-block;padding:3px 6px;border:1px solid #ccc;border-radius:999px;font-size:12px;margin-left:5px}
+</style>
+</head>
+<body>
+
+<h2>IA Escanteios — SUPER ECONÔMICO</h2>
+<div class="card">
+<button class="btn2" id="load">Carregar jogos ao vivo</button>
+</div>
+
+<div class="card">
+<b>Jogos ao vivo</b>
+<div class="list" id="live"></div>
+</div>
+
+<div class="card">
+<b>Resultado da Avaliação</b>
+<pre id="out">Clique em Avaliar</pre>
+</div>
+
+<script>
+const $ = id => document.getElementById(id)
+
+let LIVE_MEM = []
+let lastEvalAt = 0
+const COOLDOWN_MS = 10000
+
+async function loadLive(){
+  $("live").innerHTML = "Carregando..."
+  const r = await fetch("/api/live/list")
+  const j = await r.json()
+  if(!j.ok){ $("live").innerHTML = "Erro"; return }
+  LIVE_MEM = j.items || []
+  render()
+}
+
+function render(){
+  const box = $("live")
+  box.innerHTML = ""
+  LIVE_MEM.slice(0,80).forEach(it=>{
+    const div = document.createElement("div")
+    div.className="item"
+    div.innerHTML = `
+      <b>${it.home}</b> vs <b>${it.away}</b>
+      <span class="badge">${it.score}</span>
+      <span class="badge">min ${it.minute}</span>
+      <button class="btn2" data-id="${it.fixture_id}">Avaliar</button>
+    `
+    div.querySelector("button").onclick=()=>evaluate(it)
+    box.appendChild(div)
+  })
+}
+
+async function evaluate(it){
+
+  const now = Date.now()
+
+  if(now - lastEvalAt < COOLDOWN_MS){
+    alert("Aguarde 10 segundos antes de avaliar outro jogo.")
+    return
+  }
+
+  if(it.minute < 12){
+    alert("Modo econômico: não avaliar antes do minuto 12.")
+    return
+  }
+
+  if(it.minute > 85){
+    alert("Modo econômico: não avaliar após minuto 85.")
+    return
+  }
+
+  lastEvalAt = now
+
+  $("out").textContent = "Avaliando..."
+  const r = await fetch(`/api/live/eval/${it.fixture_id}`)
+  const j = await r.json()
+
+  if(!j.ok){
+    $("out").textContent = "Erro: " + j.error
+    return
+  }
+
+  $("out").textContent = JSON.stringify(j.heuristic,null,2)
+}
+
+$("load").onclick = loadLive
+</script>
+
+</body>
+</html>

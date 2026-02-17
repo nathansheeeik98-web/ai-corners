@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IA Escanteios Ao Vivo — Dashboard</title>
+  <style>
+    :root { --b:#ddd; --r:14px; --bg:#0f0f10; --fg:#f3f3f3; --mut:#bdbdbd; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:1100px}
+    h1{font-size:20px;margin:0 0 8px}
+    p{margin:6px 0 12px;line-height:1.35}
+    .card{border:1px solid var(--b);border-radius:var(--r);padding:12px;margin:10px 0}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row>*{flex:1;min-width:160px}
+    label{font-size:12px;opacity:.85}
+    input,select,textarea,button{width:100%;padding:10px;font-size:16px;border-radius:12px;border:1px solid var(--b)}
+    textarea{min-height:72px}
+    button{cursor:pointer;border:none}
+    .btn{background:#111;color:#fff}
+    .btn2{background:#f3f3f3}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--b);margin:4px 6px 0 0;font-size:13px}
+    .hint{font-size:12px;opacity:.85}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);color:var(--fg);padding:12px;border-radius:12px;margin:0}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{border-bottom:1px solid #eee;padding:8px;vertical-align:top}
+    th{text-align:left;white-space:nowrap}
+    .small{font-size:12px;color:#444}
+    .tag{display:inline-block;padding:4px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px;margin-right:6px}
+    .good{border-color:#bde5bd}
+    .bad{border-color:#f2c2c2}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+  </style>
+</head>
+<body>
+  <h1>IA Escanteios Ao Vivo — Dashboard</h1>
+  <p class="hint">
+    Use isso pra padronizar decisão e cortar emoção. ⚠️ Sem garantias, sempre com risco.
+  </p>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Modo</label>
+        <select id="mode">
+          <option value="AUTO">AUTO (recomendado)</option>
+          <option value="CONSERVADOR">CONSERVADOR</option>
+          <option value="AGRESSIVO">AGRESSIVO</option>
+        </select>
+      </div>
+      <div>
+        <label>Banca atual (R$)</label>
+        <input id="bankroll" type="number" placeholder="Ex: 40" value="40" />
+      </div>
+      <div>
+        <label>Meta de hoje (R$)</label>
+        <input id="goal" type="number" placeholder="Ex: 80" value="80" />
+      </div>
+      <div>
+        <label>% máximo por entrada</label>
+        <select id="maxPct">
+          <option value="50">50%</option>
+          <option value="60" selected>60%</option>
+          <option value="70">70%</option>
+          <option value="80">80%</option>
+        </select>
+      </div>
+    </div>
+    <div class="hint" style="margin-top:8px">
+      Dica: com banca R$40, usar 60% = R$24 por entrada (e guardar o resto).
+    </div>
+  </div>
+
+  <div class="card grid">
+    <div>
+      <label>Minuto</label>
+      <input id="minute" type="number" placeholder="Ex: 23" />
+    </div>
+    <div>
+      <label>Placar</label>
+      <input id="score" placeholder="Ex: 0-0" value="0-0"/>
+    </div>
+
+    <div class="row" style="grid-column:1/-1">
+      <div>
+        <label>Escanteios (mandante)</label>
+        <input id="corners_home" type="number" placeholder="Ex: 3" />
+      </div>
+      <div>
+        <label>Escanteios (visitante)</label>
+        <input id="corners_away" type="number" placeholder="Ex: 1" />
+      </div>
+      <div>
+        <label>Escanteios (total)</label>
+        <input id="corners_total" type="number" placeholder="Ex: 4" />
+      </div>
+    </div>
+
+    <div class="row" style="grid-column:1/-1">
+      <div>
+        <label>Finalizações (total)</label>
+        <input id="shots_total" type="number" placeholder="Ex: 7" />
+      </div>
+      <div>
+        <label>No alvo</label>
+        <input id="shots_on_target" type="number" placeholder="Ex: 2" />
+      </div>
+      <div>
+        <label>Ataques perigosos (opcional)</label>
+        <input id="dangerous_attacks" type="number" placeholder="Ex: 18" />
+      </div>
+    </div>
+
+    <div>
+      <label>Quem está pressionando?</label>
+      <select id="pressure_side">
+        <option value="Equilibrado">Equilibrado</option>
+        <option value="Mandante">Mandante</option>
+        <option value="Visitante">Visitante</option>
+      </select>
+    </div>
+
+    <div>
+      <label>Cartões vermelhos (0/1/2)</label>
+      <input id="red_cards" type="number" value="0" />
+    </div>
+
+    <div style="grid-column:1/-1">
+      <label>Observações (ex: “muitos cruzamentos”, “jogo truncado”)</label>
+      <textarea id="notes"></textarea>
+    </div>
+
+    <div class="row" style="grid-column:1/-1">
+      <button class="btn" id="go">Analisar & Salvar</button>
+      <button class="btn2" id="fill">Exemplo</button>
+      <button class="btn2" id="clear">Limpar</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="meta"></div>
+    <pre id="out">Preencha e clique em “Analisar & Salvar”.</pre>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Filtro</label>
+        <input id="filter" placeholder="Ex: ENTRAR, Over 8.5, 0-0, 23" />
+      </div>
+      <div>
+        <label>Exportar</label>
+        <div class="row">
+          <button class="btn2" id="exportJson">JSON</button>
+          <button class="btn2" id="exportCsv">CSV</button>
+        </div>
+      </div>
+      <div>
+        <label>Histórico</label>
+        <div class="row">
+          <button class="btn2" id="refresh">Atualizar</button>
+          <button class="btn2" id="wipeLocal">Limpar (somente tela)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:8px" id="stats"></div>
+
+    <div style="overflow:auto;margin-top:10px">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>Quando</th>
+            <th>Jogo</th>
+            <th>Min</th>
+            <th>Esc</th>
+            <th>Chutes</th>
+            <th>Pressão</th>
+            <th>Decisão</th>
+            <th>Linha</th>
+            <th>Conf</th>
+            <th>Resultado</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <p class="hint" style="margin-top:10px">
+      “Resultado” você marca depois: WIN/LOSS. Isso te dá visão real do que está funcionando pra você.
+    </p>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function uid() {
+    return Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
+  }
+
+  function computeStake() {
+    const br = Number($("bankroll").value || 0);
+    const pct = Number($("maxPct").value || 60) / 100;
+    return Math.max(0, Math.round(br * pct * 100) / 100);
+  }
+
+  function payload() {
+    return {
+      mode: $("mode").value,
+      minute: Number($("minute").value || 0),
+      score: $("score").value || "0-0",
+      corners_home: Number($("corners_home").value || 0),
+      corners_away: Number($("corners_away").value || 0),
+      corners_total: Number($("corners_total").value || 0),
+      shots_total: Number($("shots_total").value || 0),
+      shots_on_target: Number($("shots_on_target").value || 0),
+      dangerous_attacks: $("dangerous_attacks").value ? Number($("dangerous_attacks").value) : null,
+      pressure_side: $("pressure_side").value,
+      red_cards: Number($("red_cards").value || 0),
+      notes: $("notes").value || "",
+      bankroll: Number($("bankroll").value || 0),
+      goal: Number($("goal").value || 0),
+      max_pct: Number($("maxPct").value || 60)
+    };
+  }
+
+  function setMeta(chips) {
+    const meta = $("meta");
+    meta.innerHTML = "";
+    chips.forEach(t => {
+      const s = document.createElement("span");
+      s.className = "pill";
+      s.textContent = t;
+      meta.appendChild(s);
+    });
+  }
+
+  function renderOut(obj) {
+    $("out").textContent = JSON.stringify(obj, null, 2);
+  }
+
+  async function saveHistory(entry) {
+    await fetch("/api/history", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify(entry)
+    });
+  }
+
+  function toCSV(items) {
+    const head = [
+      "id","created_at","mode","minute","score",
+      "corners_home","corners_away","corners_total",
+      "shots_total","shots_on_target","pressure_side","red_cards",
+      "acao","confianca","linha_sugerida","stake","result"
+    ];
+    const esc = (v) => String(v ?? "").replaceAll('"','""');
+    const row = (it) => head.map(k => `"${esc(it[k])}"`).join(",");
+    return [head.join(","), ...items.map(row)].join("\n");
+  }
+
+  function applyAutoTightening(result) {
+    // AUTO: se a meta estiver perto, fica mais conservador automaticamente
+    const br = Number($("bankroll").value || 0);
+    const goal = Number($("goal").value || 0);
+    if (!goal || goal <= br) return result;
+
+    const remaining = goal - br;
+    const out = { ...result };
+
+    // se falta pouco, evita risco
+    if (remaining <= br * 0.5) {
+      if (out.confianca < 78) out.acao = "ESPERAR";
+      if (out.linha_sugerida === "Over 9.5") out.linha_sugerida = "Over 8.5";
+    }
+    return out;
+  }
+
+  async function refreshHistory() {
+    const r = await fetch("/api/history");
+    const j = await r.json();
+    const items = Array.isArray(j.items) ? j.items : [];
+    window.__H = items;
+    renderTable();
+    renderStats();
+  }
+
+  function renderStats() {
+    const items = window.__H || [];
+    const el = $("stats");
+    el.innerHTML = "";
+
+    const total = items.length;
+    const entrar = items.filter(x => x?.acao === "ENTRAR").length;
+    const win = items.filter(x => x?.result === "WIN").length;
+    const loss = items.filter(x => x?.result === "LOSS").length;
+    const decided = win + loss;
+    const wr = decided ? Math.round((win / decided) * 100) : 0;
+
+    const s1 = document.createElement("span");
+    s1.className = "tag";
+    s1.textContent = `Registros: ${total}`;
+    const s2 = document.createElement("span");
+    s2.className = "tag good";
+    s2.textContent = `ENTRAR: ${entrar}`;
+    const s3 = document.createElement("span");
+    s3.className = "tag";
+    s3.textContent = `WIN: ${win} | LOSS: ${loss} | WR: ${wr}%`;
+
+    const stake = computeStake();
+    const s4 = document.createElement("span");
+    s4.className = "tag";
+    s4.textContent = `Stake sugerida (agora): R$ ${stake}`;
+
+    el.appendChild(s1); el.appendChild(s2); el.appendChild(s3); el.appendChild(s4);
+  }
+
+  function renderTable() {
+    const filter = ($("filter").value || "").toLowerCase().trim();
+    const items = (window.__H || []).filter(it => {
+      if (!filter) return true;
+      const blob = JSON.stringify(it).toLowerCase();
+      return blob.includes(filter);
+    });
+
+    const tbody = $("tbl").querySelector("tbody");
+    tbody.innerHTML = "";
+
+    for (const it of items) {
+      const tr = document.createElement("tr");
+
+      const created = new Date(it.created_at || Date.now());
+      const when = created.toLocaleString();
+
+      const td = (txt, mono=false) => {
+        const d = document.createElement("td");
+        d.textContent = txt ?? "";
+        if (mono) d.className = "mono";
+        return d;
+      };
+
+      tr.appendChild(td(when));
+      tr.appendChild(td(it.score || "0-0", true));
+      tr.appendChild(td(it.minute));
+      tr.appendChild(td(`${it.corners_total} (${it.corners_home}/${it.corners_away})`));
+      tr.appendChild(td(`${it.shots_total} (${it.shots_on_target} no alvo)`));
+      tr.appendChild(td(it.pressure_side));
+      tr.appendChild(td(it.acao));
+      tr.appendChild(td(it.linha_sugerida));
+      tr.appendChild(td(it.confianca));
+
+      // Resultado (select)
+      const resTd = document.createElement("td");
+      const sel = document.createElement("select");
+      ["", "WIN", "LOSS"].forEach(v => {
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = v === "" ? "—" : v;
+        if ((it.result || "") === v) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.onchange = async () => {
+        const v = sel.value || "";
+        await fetch(`/api/history/${it.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({ result: v })
+        });
+        await refreshHistory();
+      };
+      resTd.appendChild(sel);
+      tr.appendChild(resTd);
+
+      tbody.appendChild(tr);
+    }
+  }
+
+  $("filter").addEventListener("input", renderTable);
+
+  $("go").onclick = async () => {
+    $("out").textContent = "Analisando...";
+    setMeta([]);
+
+    const p = payload();
+    const stake = computeStake();
+
+    const r = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify(p)
+    });
+
+    const j = await r.json();
+    let result = j.result || j.heuristic || j;
+
+    // AUTO ajusta conforme meta/banca
+    if ($("mode").value === "AUTO") {
+      result = applyAutoTightening(result);
+    }
+
+    const entry = {
+      id: uid(),
+      created_at: new Date().toISOString(),
+      mode: $("mode").value,
+      bankroll: Number($("bankroll").value || 0),
+      goal: Number($("goal").value || 0),
+      stake,
+      // dados do jogo
+      minute: p.minute,
+      score: p.score,
+      corners_home: p.corners_home,
+      corners_away: p.corners_away,
+      corners_total: p.corners_total,
+      shots_total: p.shots_total,
+      shots_on_target: p.shots_on_target,
+      dangerous_attacks: p.dangerous_attacks,
+      pressure_side: p.pressure_side,
+      red_cards: p.red_cards,
+      notes: p.notes,
+      // decisão
+      acao: result.acao,
+      confianca: result.confianca,
+      linha_sugerida: result.linha_sugerida,
+      cashout_plano: result.cashout_plano,
+      result: "" // WIN/LOSS depois
+    };
+
+    setMeta([
+      `Modo: ${$("mode").value}`,
+      `Stake sugerida: R$ ${stake}`,
+      `Decisão: ${entry.acao}`,
+      `Linha: ${entry.linha_sugerida}`,
+      `Conf: ${entry.confianca}`
+    ]);
+
+    renderOut(result);
+    await saveHistory(entry);
+    await refreshHistory();
+  };
+
+  $("fill").onclick = () => {
+    $("minute").value = 23;
+    $("score").value = "0-0";
+    $("corners_home").value = 3;
+    $("corners_away").value = 1;
+    $("corners_total").value = 4;
+    $("shots_total").value = 8;
+    $("shots_on_target").value = 2;
+    $("dangerous_attacks").value = 18;
+    $("pressure_side").value = "Mandante";
+    $("red_cards").value = 0;
+    $("notes").value = "Muitos cruzamentos e pressão do mandante.";
+  };
+
+  $("clear").onclick = () => {
+    ["minute","corners_home","corners_away","corners_total","shots_total","shots_on_target","dangerous_attacks","notes"]
+      .forEach(id => $(id).value = "");
+    $("score").value = "0-0";
+    $("pressure_side").value = "Equilibrado";
+    $("red_cards").value = 0;
+    $("out").textContent = "Preencha e clique em “Analisar & Salvar”.";
+    setMeta([]);
+  };
+
+  $("refresh").onclick = refreshHistory;
+
+  $("wipeLocal").onclick = () => {
+    window.__H = [];
+    renderTable();
+    renderStats();
+  };
+
+  $("exportJson").onclick = async () => {
+    const items = window.__H || [];
+    const blob = new Blob([JSON.stringify(items, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "history.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  $("exportCsv").onclick = async () => {
+    const items = window.__H || [];
+    const csv = toCSV(items);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "history.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // boot
+  refreshHistory();
+</script>
+</body>
+</html>

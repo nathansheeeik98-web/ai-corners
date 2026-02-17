@@ -1,0 +1,22 @@
+# deps
+node_modules/
+
+# secrets
+.env
+.env.*
+*.key
+*.pem
+
+# local data
+history.json
+*.log
+
+# secrets
+.env
+.env.*
+.env0
+
+# secrets
+.env
+.env.*
+.env0

@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IA Escanteios — Ultra (Econômico + Ranking)</title>
+  <style>
+    :root { --b:#ddd; --r:14px; --bg:#0f0f10; --fg:#f3f3f3; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:1100px}
+    h1{font-size:20px;margin:0 0 8px}
+    .hint{font-size:12px;opacity:.85;margin:6px 0 10px;line-height:1.35}
+    .card{border:1px solid var(--b);border-radius:var(--r);padding:12px;margin:10px 0}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .row>*{flex:1;min-width:160px}
+    label{font-size:12px;opacity:.85}
+    input,button,select{width:100%;padding:10px;font-size:16px;border-radius:12px;border:1px solid var(--b)}
+    button{cursor:pointer;border:none}
+    .btn{background:#111;color:#fff}
+    .btn2{background:#f3f3f3}
+    pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);color:var(--fg);padding:12px;border-radius:12px;margin:0}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;border:1px solid var(--b);margin-right:6px;font-size:13px;margin-top:6px}
+    .list{max-height:360px;overflow:auto;border:1px solid #eee;border-radius:12px}
+    .item{padding:10px;border-bottom:1px solid #eee}
+    .item:last-child{border-bottom:none}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    .badge{display:inline-block;padding:3px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px;margin-left:6px}
+    .bad{border-color:#f2c2c2}
+    .good{border-color:#bde5bd}
+    .warn{border-color:#f5e2a6}
+  </style>
+</head>
+<body>
+  <h1>IA Escanteios — Ultra (Super Econômico + Ranking + Alertas)</h1>
+  <div class="hint">
+    ✅ “Carregar” é barato (lista) • ✅ “Avaliar” puxa stats (gasta) • ✅ Janela: 12–85’ • ✅ Ranking só 15–75’ • ✅ Bloqueia min≤20 com 0 escanteios • ✅ Alerta só se ENTRAR e conf≥80.
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div><button class="btn2" id="loadLive">Carregar jogos ao vivo</button></div>
+      <div>
+        <label>Filtro (time/liga/país)</label>
+        <input id="filter" placeholder="Ex: Brazil / Premier / Arsenal" />
+      </div>
+      <div>
+        <label>Alerta mínimo (confiança)</label>
+        <select id="alertMin">
+          <option value="75">75</option>
+          <option value="80" selected>80</option>
+          <option value="85">85</option>
+          <option value="90">90</option>
+        </select>
+      </div>
+      <div>
+        <label>Cooldown avaliar</label>
+        <input id="cooldown" type="number" value="10" />
+      </div>
+    </div>
+    <div id="meta"></div>
+  </div>
+
+  <div class="card">
+    <b>🔥 Melhores jogos agora (somente 15–75’ e após avaliar)</b>
+    <div class="hint">Clique “Avaliar” em alguns jogos. Ranking usa confiança + ritmo (esc/min) e volume de chutes.</div>
+    <div class="list" id="bestNow"></div>
+  </div>
+
+  <div class="card">
+    <b>Jogos ao vivo</b>
+    <div class="hint">Dica: avalie 5–10 jogos e escolha 1 pra monitorar (plano grátis).</div>
+    <div class="list" id="liveList"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Fixture #1</label>
+        <input id="fx1" placeholder="preenchido ao clicar em Monitorar" />
+      </div>
+      <div>
+        <label>Monitorar</label>
+        <button class="btn" id="setFx">Salvar & Monitorar</button>
+      </div>
+      <div>
+        <label>Atualizar (gasta)</label>
+        <button class="btn2" id="force">Forçar atualização agora</button>
+      </div>
+    </div>
+
+    <div class="hint">Painel de snapshots do servidor (não gasta API-Football na UI; só quando você força ou quando o auto-refresh roda).</div>
+    <pre id="snap">Sem dados ainda.</pre>
+  </div>
+
+  <div class="card">
+    <b>Resultado / Ação</b>
+    <pre id="out">Clique em “Avaliar”.</pre>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let LIVE_MEM = [];
+  let EVAL_MEM = {}; // fixtureId -> { snapshot, heuristic, at }
+  let BLOCKED = {};  // fixtureId -> reason string
+  let lastEvalAt = 0;
+  let lastAlertAt = 0;
+
+  const WINDOW_EVAL_MIN = 12;
+  const WINDOW_EVAL_MAX = 85;
+  const WINDOW_RANK_MIN = 15;
+  const WINDOW_RANK_MAX = 75;
+  const ALERT_COOLDOWN_MS = 120000; // 2 min
+
+  function metaPills(list) {
+    const el = $("meta");
+    el.innerHTML = "";
+    list.forEach(t => {
+      const s = document.createElement("span");
+      s.className = "pill";
+      s.textContent = t;
+      el.appendChild(s);
+    });
+  }
+
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880;
+      g.gain.value = 0.06;
+      o.start();
+      setTimeout(() => { o.stop(); ctx.close(); }, 180);
+      if (navigator.vibrate) navigator.vibrate([120, 80, 120]);
+    } catch {}
+  }
+
+  function norm(s){ return String(s||"").toLowerCase().trim(); }
+
+  function paceCorners(snapshot){
+    const m = Number(snapshot?.minute || 0);
+    const c = Number(snapshot?.corners_total || 0);
+    if (!m) return 0;
+    return c / m; // corners/min
+  }
+
+  function evalScore(e){
+    const h = e?.heuristic || {};
+    const s = e?.snapshot || {};
+    const conf = Number(h.confianca || 0);
+    const m = Number(s.minute || 0);
+    const cpm = paceCorners(s);
+    const shots = Number(s.shots_total || 0);
+    const sot = Number(s.shots_on_target || 0);
+
+    // Base: confiança (0..100)
+    let score = conf;
+
+    // Ritmo corners (peso forte)
+    score += Math.min(30, cpm * 180); // ~ 0.1 c/m => +18
+
+    // Volume de chutes (peso médio)
+    score += Math.min(20, shots * 1.2);
+    score += Math.min(10, sot * 1.8);
+
+    // Janela ideal
+    if (m >= WINDOW_RANK_MIN && m <= WINDOW_RANK_MAX) score += 6;
+
+    // Penaliza se conf baixo
+    if (conf < 55) score -= 12;
+
+    return Math.round(score);
+  }
+
+  function canEvaluateMinute(min){
+    return min >= WINDOW_EVAL_MIN && min <= WINDOW_EVAL_MAX;
+  }
+
+  async function loadLive() {
+    $("liveList").innerHTML = "Carregando...";
+    const r = await fetch("/api/live/list");
+    const j = await r.json();
+    if (!j.ok) {
+      $("liveList").innerHTML = "Erro ao carregar: " + (j.error || "");
+      return;
+    }
+    LIVE_MEM = j.items || [];
+    renderLiveList();
+    renderBestNow();
+
+    metaPills([
+      `Jogos carregados: ${LIVE_MEM.length}`,
+      `Avaliar: ${WINDOW_EVAL_MIN}–${WINDOW_EVAL_MAX}’`,
+      `Ranking: ${WINDOW_RANK_MIN}–${WINDOW_RANK_MAX}’`,
+      `Bloqueio: ≤20’ e 0 escanteios`,
+      `Alerta: ENTRAR + conf≥${$("alertMin").value}`
+    ]);
+  }
+
+  function renderLiveList() {
+    const filter = norm($("filter").value);
+    const items = LIVE_MEM.filter(x => {
+      if (!filter) return true;
+      const blob = norm(`${x.country} ${x.league} ${x.home} ${x.away}`);
+      return blob.includes(filter);
+    }).slice(0, 120);
+
+    const box = $("liveList");
+    box.innerHTML = "";
+
+    if (!items.length) {
+      box.innerHTML = "<div class='item'>Nada encontrado. Tente outro filtro.</div>";
+      return;
+    }
+
+    for (const it of items) {
+      const fid = String(it.fixture_id);
+      const ev = EVAL_MEM[fid];
+      const blk = BLOCKED[fid];
+      const m = Number(it.minute || 0);
+
+      const minuteBadge = canEvaluateMinute(m)
+        ? `<span class="badge good">min ${m}</span>`
+        : `<span class="badge warn">min ${m} (fora)</span>`;
+
+      const evalBadges = ev
+        ? `<span class="badge ${ev.heuristic.acao === "ENTRAR" ? "good" : "warn"}">Conf ${ev.heuristic.confianca}</span>
+           <span class="badge">${ev.heuristic.acao}</span>
+           <span class="badge">${ev.heuristic.linha_sugerida}</span>`
+        : "";
+
+      const blockBadge = blk ? `<span class="badge bad">BLOQUEADO</span>` : "";
+
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div>
+          <b>${it.home}</b> vs <b>${it.away}</b>
+          <span class="mono badge">(${it.score})</span>
+          ${minuteBadge}
+          ${blockBadge}
+          ${evalBadges}
+        </div>
+        <div class="hint">${it.country} • ${it.league} • fixture ${fid}${blk ? " • " + blk : ""}</div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn2" data-eval="${fid}">Avaliar</button>
+          <button class="btn2" data-mon="${fid}">Monitorar (#1)</button>
+          <button class="btn2" data-show="${fid}">Ver</button>
+        </div>
+      `;
+
+      div.querySelector('[data-mon]').onclick = () => { $("fx1").value = fid; };
+      div.querySelector('[data-show]').onclick = () => {
+        if (ev) $("out").textContent = JSON.stringify(ev, null, 2);
+        else $("out").textContent = "Ainda não avaliado.";
+      };
+
+      const evalBtn = div.querySelector('[data-eval]');
+      evalBtn.onclick = () => evaluateFixture(it);
+      if (!canEvaluateMinute(m)) {
+        // não bloqueia a UI total, mas avisa e impede clique (super econômico)
+        evalBtn.disabled = true;
+        evalBtn.title = `Super econômico: avalie só entre ${WINDOW_EVAL_MIN} e ${WINDOW_EVAL_MAX} minutos.`;
+      }
+      if (blk) {
+        // bloqueado: ainda pode avaliar, mas não precisa; mantemos habilitado apenas se quiser re-checar depois de tempo
+        // aqui deixamos habilitado (se estiver na janela). Se quiser travar, mudo.
+      }
+
+      box.appendChild(div);
+    }
+  }
+
+  function renderBestNow() {
+    const box = $("bestNow");
+    const arr = Object.values(EVAL_MEM)
+      .filter(e => {
+        const m = Number(e?.snapshot?.minute || 0);
+        const fid = String(e?.snapshot?.fixture_id || "");
+        if (BLOCKED[fid]) return false;
+        return m >= WINDOW_RANK_MIN && m <= WINDOW_RANK_MAX;
+      })
+      .sort((a,b) => evalScore(b) - evalScore(a))
+      .slice(0, 20);
+
+    box.innerHTML = "";
+    if (!arr.length) {
+      box.innerHTML = "<div class='item'>Sem ranking ainda. Avalie alguns jogos (15–75’).</div>";
+      return;
+    }
+
+    for (const e of arr) {
+      const s = e.snapshot;
+      const h = e.heuristic;
+      const fid = String(s.fixture_id);
+
+      const cpm = paceCorners(s);
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `
+        <div>
+          <b>${s.match}</b> <span class="mono badge">(${s.score})</span>
+          <span class="badge ${h.acao==="ENTRAR" ? "good":"warn"}">${h.acao}</span>
+          <span class="badge">Conf ${h.confianca}</span>
+          <span class="badge">${h.linha_sugerida}</span>
+          <span class="badge">Score ${evalScore(e)}</span>
+        </div>
+        <div class="hint">
+          min ${s.minute} • esc ${s.corners_total} • ritmo ${cpm.toFixed(3)}/min • chutes ${s.shots_total} • no alvo ${s.shots_on_target} • fixture ${fid}
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn2" data-mon="${fid}">Monitorar (#1)</button>
+          <button class="btn2" data-view="${fid}">Ver detalhes</button>
+        </div>
+      `;
+      div.querySelector('[data-mon]').onclick = () => { $("fx1").value = fid; };
+      div.querySelector('[data-view]').onclick = () => { $("out").textContent = JSON.stringify(h, null, 2); };
+      box.appendChild(div);
+    }
+  }
+
+  async function evaluateFixture(it) {
+    const fid = String(it.fixture_id);
+    const now = Date.now();
+    const cd = Math.max(1, Number($("cooldown").value || 10)) * 1000;
+
+    // cooldown 10s
+    if ((now - lastEvalAt) < cd) {
+      const wait = Math.ceil((cd - (now - lastEvalAt)) / 1000);
+      alert(`Super econômico: aguarde ${wait}s para avaliar outro jogo.`);
+      return;
+    }
+
+    // janela de avaliação (12–85)
+    const minute = Number(it.minute || 0);
+    if (!canEvaluateMinute(minute)) {
+      alert(`Super econômico: avaliar só entre ${WINDOW_EVAL_MIN} e ${WINDOW_EVAL_MAX} minutos.`);
+      return;
+    }
+
+    lastEvalAt = now;
+    $("out").textContent = "Avaliando (puxando stats)...";
+
+    const r = await fetch(`/api/live/eval/${encodeURIComponent(fid)}`);
+    const j = await r.json();
+    if (!j.ok) {
+      $("out").textContent = "Erro: " + (j.error || "");
+      return;
+    }
+
+    const snap = j.snapshot;
+    const heur = j.heuristic;
+
+    // ✅ Bloqueio: min≤20 e corners_total==0
+    const m = Number(snap.minute || 0);
+    const corners = Number(snap.corners_total || 0);
+    if (m <= 20 && corners === 0) {
+      BLOCKED[fid] = `Bloqueio: min ${m} com 0 escanteios (tende a jogo morto no começo).`;
+    } else {
+      // se antes estava bloqueado e agora mudou, libera
+      if (BLOCKED[fid]) delete BLOCKED[fid];
+    }
+
+    EVAL_MEM[fid] = { snapshot: snap, heuristic: heur, at: Date.now() };
+
+    // mostra resultado principal
+    $("out").textContent = JSON.stringify({
+      jogo: snap.match,
+      minuto: snap.minute,
+      placar: snap.score,
+      corners_total: snap.corners_total,
+      shots_total: snap.shots_total,
+      shots_on_target: snap.shots_on_target,
+      bloqueado: BLOCKED[fid] ? true : false,
+      motivo_bloqueio: BLOCKED[fid] || "",
+      recomendacao: heur
+    }, null, 2);
+
+    renderLiveList();
+    renderBestNow();
+
+    // 🔔 Alerta só se ENTRAR + conf>=80 (ou o que estiver no select)
+    const minAlert = Number($("alertMin").value || 80);
+    const conf = Number(heur?.confianca || 0);
+    const shouldAlert = (heur?.acao === "ENTRAR" && conf >= minAlert && !BLOCKED[fid]);
+
+    if (shouldAlert && (Date.now() - lastAlertAt) > ALERT_COOLDOWN_MS) {
+      lastAlertAt = Date.now();
+      beep();
+      alert(`ALERTA: ENTRAR • conf ${conf} • ${heur.linha_sugerida}\n${snap.match} (${snap.score})`);
+    }
+  }
+
+  async function setFixtures() {
+    const fid = String($("fx1").value || "").trim();
+    if (!fid) { alert("Coloque um fixture no #1"); return; }
+
+    const r = await fetch("/api/live/set-fixtures", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ fixture_ids: [fid] })
+    });
+    const j = await r.json();
+    await refreshSnapshots();
+    metaPills([`Monitorando: ${(j.fixture_ids||[]).join(", ")}`, `Auto: ${j.refresh_seconds}s`, `UI: 15s`]);
+  }
+
+  async function refreshSnapshots() {
+    const r = await fetch("/api/live/snapshots");
+    const j = await r.json();
+    $("snap").textContent = JSON.stringify(j, null, 2);
+  }
+
+  async function forceRefresh() {
+    await fetch("/api/live/force-refresh", { method: "POST" });
+    await refreshSnapshots();
+  }
+
+  $("loadLive").onclick = loadLive;
+  $("setFx").onclick = setFixtures;
+  $("force").onclick = forceRefresh;
+  $("filter").addEventListener("input", renderLiveList);
+
+  // UI só puxa cache do seu servidor (não consome API-Football)
+  setInterval(refreshSnapshots, 15000);
+
+  // boot
+  renderBestNow();
+  renderLiveList();
+</script>
+</body>
+</html>
