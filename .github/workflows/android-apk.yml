@@ -58,8 +58,6 @@ jobs:
       - name: Generate Capacitor assets
         run: npx capacitor-assets generate
 
-      - name: Build web
-        run: npm run build
 
       - name: Sync Capacitor
         run: npx cap sync android
